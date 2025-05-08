@@ -1,4 +1,156 @@
 https://colab.research.google.com/drive/18BfyRvu63dAGdt76FNvJlBaGUv4cFN_k?usp=sharing  (lịch cố định)
-https://colab.research.google.com/drive/1RgbfzPmgDXJS7k4TS2916olh74Zh7v05?usp=   (random forest)
-https://colab.research.google.com/drive/1_6xNW_tE-ZUz1qinCo2yHH46wP0T2SQA?usp=sharing  (CNN)
-https://colab.research.google.com/drive/1XzuTxrUk-WXNcdXfjQ53oS_WlU3wgP_T?usp=sharing  (MILP)
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+# THÔNG SỐ HỆ THỐNG
+capacity_battery = 19.2  # kWh
+max_charge_power = 9.6  # kW
+max_discharge_power = 19.2  # kW
+soc_min = 0.2 * capacity_battery
+soc_max = 0.8 * capacity_battery
+efficiency_charge = 0.9
+efficiency_discharge = 0.85
+initial_soc = 0.5 * capacity_battery
+delta_t = 1  # giờ
+
+# GIÁ BÁN VÀ MUA ĐIỆN
+sell_price = 671  # VNĐ/kWh
+max_grid_buy = 15
+max_grid_sell = 10
+
+# Giá mua điện theo khung giờ (cấp dưới 6kV) - cập nhật theo bảng bạn gửi
+def get_buy_price_by_time(hour):
+    if 22 <= hour or hour < 4:
+        return 1830  # Thấp điểm
+    elif (9.5 <= hour < 11.5) or (17 <= hour < 20):
+        return 5174  # Cao điểm
+    else:
+        return 3007  # Bình thường
+
+# DỮ LIỆU
+hours = np.arange(0, 24)
+pv_power = np.array([0, 0, 0, 0, 0, 0, 0.66, 1.32, 2.42, 3.30, 3.96, 4.40,
+                     4.62, 4.40, 3.96, 3.08, 1.98, 0.88, 0, 0, 0, 0, 0, 0])
+load_power = np.array([0.61, 0.61, 0.61, 0.61, 0.61, 0.61, 1.90, 2.15, 0.30,
+                       0.30, 0.28, 3.13, 0.685, 0.68, 0.38, 0.38, 0.38, 1.52,
+                       3.92, 3.92, 2.02, 2.02, 0.82, 0.67])
+
+# BIẾN LƯU TRẠNG THÁI
+soc = initial_soc
+battery_state, buy_energy, sell_energy = [], [], []
+charge_energy, discharge_energy = [], []
+buy_cost_per_hour, sell_revenue_per_hour = [], []
+
+def enforce_constraints(value, min_value, max_value):
+    return max(min_value, min(value, max_value))
+
+# LẬP LỊCH NẠP/XẢ
+for i in range(len(hours)):
+    charge_amount = 0
+    discharge_amount = 0
+    grid_buy = 0
+    grid_sell = 0
+
+    # KHUNG GIỜ SẠC (11h-15h)
+    if 11 <= hours[i] < 15:
+        charge_amount = min(max_charge_power, soc_max - soc, pv_power[i] * efficiency_charge)
+        charge_amount = enforce_constraints(charge_amount, 0, max_charge_power)
+        soc += charge_amount
+        surplus = pv_power[i] - charge_amount / efficiency_charge
+        grid_sell = enforce_constraints(surplus, 0, max_grid_sell)
+
+    # KHUNG GIỜ XẢ (18h-6h)
+    elif hours[i] >= 18 or hours[i] < 6:
+        discharge_amount = min(max_discharge_power, soc - soc_min, load_power[i] / efficiency_discharge)
+        discharge_amount = enforce_constraints(discharge_amount, 0, max_discharge_power)
+        soc -= discharge_amount
+        deficit = load_power[i] - discharge_amount * efficiency_discharge
+        grid_buy = enforce_constraints(deficit, 0, max_grid_buy)
+
+    # KHÔNG SẠC/XẢ ĐỒNG THỜI
+    if discharge_amount > 0:
+        charge_amount = 0
+    if charge_amount > 0:
+        discharge_amount = 0
+
+    soc = enforce_constraints(soc, soc_min, soc_max)
+
+    # GIÁ ĐIỆN THEO KHUNG GIỜ
+    buy_price_hourly = get_buy_price_by_time(hours[i])
+
+    # LƯU KẾT QUẢ
+    charge_energy.append(charge_amount)
+    discharge_energy.append(discharge_amount)
+    battery_state.append(soc)
+    buy_energy.append(grid_buy)
+    sell_energy.append(grid_sell)
+    buy_cost_per_hour.append(grid_buy * buy_price_hourly)
+    sell_revenue_per_hour.append(grid_sell * sell_price)
+
+# TÍNH TỔNG
+cumulative_buy_cost = np.cumsum(buy_cost_per_hour)
+cumulative_sell_revenue = np.cumsum(sell_revenue_per_hour)
+
+# BIỂU ĐỒ
+plt.figure(figsize=(10, 6))
+plt.plot(hours, pv_power, 'b-o', label="Công suất PV (kW)")
+plt.plot(hours, load_power, color='orange', marker='o', label="Phụ tải (kW)")
+plt.plot(hours, buy_energy, 'g-o', label="Mua từ lưới (kW)")
+plt.plot(hours, sell_energy, 'r-o', label="Bán lên lưới (kW)")
+plt.xlabel("Giờ trong ngày")
+plt.ylabel("Công suất (kW)")
+plt.title("Công suất PV, Phụ tải, Mua/Bán theo giờ")
+plt.xticks(hours)
+plt.legend()
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(10, 6))
+plt.plot(hours, battery_state, color='purple', marker='o', label="SOC của pin (kWh)")
+plt.xlabel("Giờ trong ngày")
+plt.ylabel("Dung lượng pin (kWh)")
+plt.title("Trạng thái SOC của pin theo thời gian")
+plt.xticks(hours)
+plt.legend()
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(10, 6))
+plt.plot(hours, cumulative_buy_cost, 'g-o', label="Chi phí mua tích lũy (VNĐ)")
+plt.plot(hours, cumulative_sell_revenue, 'r-o', label="Doanh thu bán tích lũy (VNĐ)")
+plt.xlabel("Giờ trong ngày")
+plt.ylabel("VNĐ")
+plt.title("Chi phí mua và doanh thu bán điện tích lũy")
+plt.xticks(hours)
+plt.legend()
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.tight_layout()
+plt.show()
+
+# IN BẢNG LẬP LỊCH
+print("\n===== 📋 Chi tiết lập lịch mua/bán và sạc/xả điện theo từng giờ =====")
+print("Giờ |  Mua lưới (kW) | Chi phí (VNĐ) | Bán lưới (kW) | Doanh thu (VNĐ) |  Sạc (kW) |  Xả (kW) |  SOC (kWh)")
+print("-" * 100)
+
+for t in hours:
+    print(f"{t:>2}  | {buy_energy[t]:>13.2f} | {buy_cost_per_hour[t]:>13,.0f} | "
+          f"{sell_energy[t]:>13.2f} | {sell_revenue_per_hour[t]:>15,.0f} | "
+          f"{charge_energy[t]:>9.2f} | {discharge_energy[t]:>8.2f} | {battery_state[t]:>10.2f}")
+
+# TỔNG KẾT
+total_buy_energy = sum(buy_energy)
+total_sell_energy = sum(sell_energy)
+total_buy_cost = sum(buy_cost_per_hour)
+total_sell_revenue = sum(sell_revenue_per_hour)
+net_cost = total_buy_cost - total_sell_revenue
+
+print("\n===== 📊 Tổng kết trong ngày =====")
+print(f"🔹 Tổng điện mua từ lưới:       {total_buy_energy:.2f} kWh")
+print(f"🔹 Tổng điện bán lên lưới:      {total_sell_energy:.2f} kWh")
+print(f"🔹 Tổng chi phí mua điện:       {total_buy_cost:,.0f} VNĐ")
+print(f"🔹 Tổng doanh thu bán điện:     {total_sell_revenue:,.0f} VNĐ")
+print(f"🔹 📉 Tổng chi phí thực tế:       {net_cost:,.0f} VNĐ")
+
