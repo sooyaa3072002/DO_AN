@@ -1,5 +1,6 @@
 https://colab.research.google.com/drive/18BfyRvu63dAGdt76FNvJlBaGUv4cFN_k?usp=sharing  (lịch cố định)
 
+
 import numpy as np
 import matplotlib.pyplot as plt
 
