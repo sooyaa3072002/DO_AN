@@ -1,0 +1,93 @@
+https://colab.research.google.com/drive/1_6xNW_tE-ZUz1qinCo2yHH46wP0T2SQA?usp=sharing
+
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense
+from tensorflow.keras.utils import to_categorical
+from google.colab import files
+
+# 1. Upload file dữ liệu
+print("Vui lòng tải lên tệp CSV của bạn...")
+uploaded = files.upload()
+file_name = list(uploaded.keys())[0]
+file_path = f"/content/{file_name}"
+# ===== 1. Đọc và xử lý dữ liệu =====
+df = pd.read_csv("dauvaorandom.csv")
+
+features = ['Radiation', 'Temperature', 'PV_Power_kW', 'Load_Power_kW', 'SOC_kWh', 'Gia_mua_dien', 'Gia_ban_dien']
+label = 'action'
+
+scaler = MinMaxScaler()
+X_scaled = scaler.fit_transform(df[features])
+y = df[label].values
+
+window_size = 24
+X_seq, y_seq = [], []
+for i in range(len(X_scaled) - window_size):
+    X_seq.append(X_scaled[i:i + window_size])
+    y_seq.append(y[i + window_size])
+
+X_seq = np.array(X_seq)
+y_seq = to_categorical(y_seq, num_classes=3)
+
+X_train, X_test, y_train, y_test = train_test_split(X_seq, y_seq, test_size=0.2, random_state=42)
+
+# ===== 2. Mô hình CNN =====
+model = Sequential([
+    Conv1D(64, 3, activation='relu', input_shape=(24, 7)),
+    MaxPooling1D(2),
+    Conv1D(32, 3, activation='relu'),
+    Flatten(),
+    Dense(64, activation='relu'),
+    Dense(3, activation='softmax')
+])
+
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+model.fit(X_train, y_train, epochs=20, batch_size=32, validation_data=(X_test, y_test))
+
+# ===== 3. Đánh giá mô hình =====
+y_pred_probs = model.predict(X_test)
+y_pred = np.argmax(y_pred_probs, axis=1)
+y_true = np.argmax(y_test, axis=1)
+
+print("=== Classification Report ===")
+print(classification_report(y_true, y_pred, target_names=["Không làm gì", "Sạc", "Xả"]))
+print("Accuracy:", accuracy_score(y_true, y_pred))
+
+cm = confusion_matrix(y_true, y_pred)
+plt.figure(figsize=(6, 5))
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+            xticklabels=["Không làm gì", "Sạc", "Xả"],
+            yticklabels=["Không làm gì", "Sạc", "Xả"])
+plt.title("Confusion Matrix")
+plt.xlabel("Dự đoán")
+plt.ylabel("Thực tế")
+plt.tight_layout()
+plt.savefig("confusion_matrix.png")
+plt.show()
+
+# ===== 4. Dự báo 24 giờ tiếp theo =====
+def predict_schedule(data_48h_df, model, scaler, features):
+    data_scaled = scaler.transform(data_48h_df[features].values)
+    predictions = []
+    for i in range(24):  # Dự báo 24 giờ
+        window = data_scaled[i:i + 24]
+        input_seq = np.expand_dims(window, axis=0)
+        pred = model.predict(input_seq, verbose=0)
+        action = np.argmax(pred, axis=1)[0]
+        predictions.append(action)
+    return predictions
+
+df_48h = df.iloc[-48:]
+predicted_actions = predict_schedule(df_48h, model, scaler, features)
+
+action_map = {0: "Không làm gì", 1: "Sạc", 2: "Xả"}
+print("\\nLịch hành động 24 giờ tới:")
+for hour, act in enumerate(predicted_actions, 1):
+    print(f"Giờ {hour:02d}: {action_map[act]}")
