@@ -1,0 +1,156 @@
+https://colab.research.google.com/drive/1RgbfzPmgDXJS7k4TS2916olh74Zh7v05?usp=sharing
+
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+from google.colab import files
+
+# 1. Upload file dữ liệu
+print("Vui lòng tải lên tệp CSV của bạn...")
+uploaded = files.upload()
+file_name = list(uploaded.keys())[0]
+file_path = f"/content/{file_name}"
+
+# 2. Đọc dữ liệu
+df = pd.read_csv(file_path)
+
+# 3. Kiểm tra dữ liệu
+print("\n==== Thông tin dữ liệu ====")
+print(df.info())
+print("\n==== 5 dòng đầu ====")
+print(df.head())
+print("\n==== Phân phối action ====")
+print(df["action"].value_counts())
+
+
+# Trung bình PV_Power_kW trong 12 giờ trước
+df["pvAvg12h"] = df["PV_Power_kW"].rolling(window=12, min_periods=1).mean().shift(1)
+
+# Trung bình Gia_mua_dien trong 12 giờ trước
+df["priceAvg12h"] = df["Gia_mua_dien"].rolling(window=12, min_periods=1).mean().shift(1)
+
+# Trung bình Load_Power_kW trong 12 giờ trước
+df["loadAvg12h"] = df["Load_Power_kW"].rolling(window=12, min_periods=1).mean().shift(1)
+
+# Xử lý giá trị NaN
+df.fillna(0, inplace=True)
+
+# 5. Chọn đặc trưng và nhãn
+feature_cols = [
+     "PV_Power_kW", "Load_Power_kW",
+    "SOC_kWh", "Gia_mua_dien", "Gia_ban_dien", "pvAvg12h", "priceAvg12h", "loadAvg12h"
+]
+X = df[feature_cols]
+y = df["action"]
+
+# 6. Chia tập huấn luyện và kiểm tra
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# 7. Huấn luyện mô hình Random Forest
+model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, class_weight='balanced')
+model.fit(X_train, y_train)
+
+# 8. Dự đoán trên tập kiểm tra
+y_pred = model.predict(X_test)
+
+# 9. Đánh giá mô hình
+print("\n==== Báo Cáo Phân Loại ====")
+print(classification_report(y_test, y_pred, target_names=["Idle (0)", "Charge (1)", "Discharge (2)"]))
+print("Độ chính xác tổng thể:", accuracy_score(y_test, y_pred))
+
+# Ma trận nhầm lẫn
+print("\n==== Ma Trận Nhầm Lẫn ====")
+conf_matrix = confusion_matrix(y_test, y_pred)
+print(conf_matrix)
+
+# 10. Trực quan hóa ma trận nhầm lẫn
+plt.figure(figsize=(6, 4))
+sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues',
+            xticklabels=["Idle", "Charge", "Discharge"],
+            yticklabels=["Idle", "Charge", "Discharge"])
+plt.xlabel("Dự đoán")
+plt.ylabel("Thực tế")
+plt.title("Ma Trận Nhầm Lẫn")
+plt.tight_layout()
+plt.show()
+
+# 11. Tầm quan trọng của đặc trưng
+importances = model.feature_importances_
+feat_imp_df = pd.DataFrame({'Feature': feature_cols, 'Importance': importances})
+feat_imp_df.sort_values(by="Importance", ascending=False, inplace=True)
+
+print("\n==== Tầm Quan Trọng Đặc Trưng ====")
+print(feat_imp_df)
+
+# Trực quan hóa tầm quan trọng đặc trưng
+plt.figure(figsize=(10, 6))
+sns.barplot(x="Importance", y="Feature", data=feat_imp_df)
+plt.title("Tầm Quan Trọng Của Các Đặc Trưng")
+plt.tight_layout()
+plt.show()
+
+# 12. Dự đoán trên dữ liệu mẫu
+# Dữ liệu mẫu với các giá trị hợp lý dựa trên dữ liệu gốc
+data_samples = pd.DataFrame({
+    "PV_Power_kW": [1, 5, 0],
+    "Load_Power_kW": [1, 3, 2],
+    "SOC_kWh": [5, 12, 8],
+    "Gia_mua_dien": [3007, 5174, 5174],
+    "Gia_ban_dien": [671, 671, 671],
+    "pvAvg12h": [1.5, 3.5, 2.0],
+    "priceAvg12h": [2500, 4500, 4800],
+    "loadAvg12h": [1.2, 2.5, 2.0]
+})
+
+# Dự đoán hành động
+predictions = model.predict(data_samples)
+
+# In kết quả dự đoán
+print("\n==== Dự Đoán Trên Dữ Liệu Mẫu ====")
+action_map = {0: "Idle", 1: "Charge", 2: "Discharge"}
+for i, pred in enumerate(predictions):
+    print(f"Ví dụ {i+1}: Dự đoán hành động = {action_map[pred]}")
+  # 13. Dự đoán hành động trên dữ liệu CSV mới
+
+
+
+from google.colab import files
+import pandas as pd
+
+# Bước 1: Upload file mới
+print("\n📂 Vui lòng tải lên tệp CSV dữ liệu mới để dự đoán hành động...")
+new_uploaded = files.upload()
+new_file_name = list(new_uploaded.keys())[0]
+new_file_path = f"/content/{new_file_name}"
+
+# Bước 2: Đọc dữ liệu Excel
+new_df = pd.read_excel(new_file_path)
+# Bước 3: Tiền xử lý dữ liệu giống như dữ liệu huấn luyện
+new_df["pvAvg12h"] = new_df["PV_Power_kW"].rolling(window=12, min_periods=1).mean().shift(1)
+new_df["priceAvg12h"] = new_df["Gia_mua_dien"].rolling(window=12, min_periods=1).mean().shift(1)
+new_df["loadAvg12h"] = new_df["Load_Power_kW"].rolling(window=12, min_periods=1).mean().shift(1)
+new_df.fillna(0, inplace=True)
+
+# Bước 4: Lấy đặc trưng
+X_new = new_df[feature_cols]
+
+# Bước 3: Dự đoán hành động
+X_new = new_df[feature_cols]  # đảm bảo feature_cols đã được định nghĩa từ trước
+new_predictions = model.predict(X_new)
+
+# Bước 4: Gắn nhãn kết quả
+action_map = {0: "Idle", 1: "Charge", 2: "Discharge"}
+new_df["Predicted_Action"] = [action_map[pred] for pred in new_predictions]
+
+# Bước 5: Hiển thị kết quả
+print("\n✅ Kết quả dự đoán hành động:")
+print(new_df[["Hour", "PV_Power_kW", "Load_Power_kW", "SOC_kWh", "Gia_mua_dien", "Predicted_Action"]].head())
+
+# Bước 6: Lưu kết quả ra file CSV
+output_path = "/content/du_doan_hanh_dong.csv"
+new_df.to_csv(output_path, index=False)
+print(f"💾 Kết quả đã được lưu vào: {output_path}")
