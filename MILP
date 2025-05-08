@@ -1,0 +1,158 @@
+https://colab.research.google.com/drive/1XzuTxrUk-WXNcdXfjQ53oS_WlU3wgP_T?usp=sharing
+
+!pip install pulp
+import numpy as np
+import pulp
+import matplotlib.pyplot as plt
+
+# THÔNG SỐ HỆ THỐNG
+capacity_battery = 19.2  # kWh
+max_charge_power = 9.6  # kW
+max_discharge_power = 19.2  # kW
+soc_min = 0.2 * capacity_battery
+soc_max = 0.8 * capacity_battery
+efficiency_charge = 0.9
+efficiency_discharge = 0.85
+initial_soc = 0.5 * capacity_battery
+
+# GIÁ ĐIỆN THEO KHUNG GIỜ
+def get_buy_price_by_time(hour):
+    if 22 <= hour or hour < 4:
+        return 1830  # thấp điểm
+    elif (9.5 <= hour < 11.5) or (17 <= hour < 20):
+        return 5174  # cao điểm
+    else:
+        return 3007  # bình thường
+
+sell_price = 671  # VNĐ/kWh (Giá bán điện mặt trời)
+
+# DỮ LIỆU CÔNG SUẤT
+hours = np.arange(0, 24)
+pv_power = np.array([0, 0, 0, 0, 0, 0, 0.66, 1.32, 2.42, 3.30, 3.96, 4.40, 4.62, 4.40, 3.96, 3.08, 1.98, 0.88, 0, 0, 0, 0, 0, 0])
+load_power = np.array([0.61, 0.61, 0.61, 0.61, 0.61, 0.61, 1.90, 2.15, 0.30, 0.30, 0.28, 3.13, 0.685, 0.68, 0.38, 0.38, 0.38, 1.52, 3.92, 3.92, 2.02, 2.02, 0.82, 0.67])
+
+# KHỞI TẠO BÀI TOÁN MILP
+model = pulp.LpProblem("Battery_Scheduling", pulp.LpMinimize)
+
+# BIẾN QUYẾT ĐỊNH
+P_charge = pulp.LpVariable.dicts("P_charge", hours, 0, max_charge_power)
+P_discharge = pulp.LpVariable.dicts("P_discharge", hours, 0, max_discharge_power)
+P_grid_buy = pulp.LpVariable.dicts("P_grid_buy", hours, 0)
+P_grid_sell = pulp.LpVariable.dicts("P_grid_sell", hours, 0)
+SOC = pulp.LpVariable.dicts("SOC", hours, soc_min, soc_max)
+x_charge = pulp.LpVariable.dicts("x_charge", hours, 0, 1, pulp.LpBinary)
+x_discharge = pulp.LpVariable.dicts("x_discharge", hours, 0, 1, pulp.LpBinary)
+
+# HÀM MỤC TIÊU
+model += pulp.lpSum(P_grid_buy[t] * get_buy_price_by_time(t) for t in hours) - pulp.lpSum(P_grid_sell[t] * sell_price for t in hours)
+
+# RÀNG BUỘC
+for t in hours:
+    if t > 0:
+        model += SOC[t] == SOC[t-1] + P_charge[t] * efficiency_charge - P_discharge[t] * (1 / efficiency_discharge)
+    else:
+        model += SOC[t] == initial_soc + P_charge[t] * efficiency_charge - P_discharge[t] * (1 / efficiency_discharge)
+
+    model += P_discharge[t] + P_grid_buy[t] - P_charge[t] - P_grid_sell[t] == load_power[t] - pv_power[t]
+    model += x_charge[t] + x_discharge[t] <= 1
+    model += P_charge[t] <= max_charge_power * x_charge[t]
+    model += P_discharge[t] <= max_discharge_power * x_discharge[t]
+    P_pv_to_charge = pulp.LpVariable(f"P_pv_to_charge_{t}", 0)
+# GIẢI BÀI TOÁN
+model.solve()
+
+# TÍNH TOÁN KẾT QUẢ
+buy_energy, sell_energy, charge_energy, discharge_energy, battery_state = [], [], [], [], []
+buy_cost_per_hour, sell_revenue_per_hour = [], []
+buy_cost_total, sell_revenue_total = 0, 0
+
+for t in hours:
+    P_buy = P_grid_buy[t].varValue
+    P_sell = P_grid_sell[t].varValue
+    P_chg = P_charge[t].varValue * efficiency_charge
+    P_dis = P_discharge[t].varValue * (1 / efficiency_discharge)
+    SOC_t = SOC[t].varValue
+
+    buy_energy.append(P_buy)
+    sell_energy.append(P_sell)
+    charge_energy.append(P_chg)
+    discharge_energy.append(P_dis)
+    battery_state.append(SOC_t)
+
+    buy_cost = P_buy * get_buy_price_by_time(t)
+    revenue = P_sell * sell_price
+
+    buy_cost_per_hour.append(buy_cost)
+    sell_revenue_per_hour.append(revenue)
+
+buy_cost_total = sum(buy_cost_per_hour)
+sell_revenue_total = sum(sell_revenue_per_hour)
+net_cost = buy_cost_total - sell_revenue_total
+
+# IN KẾT QUẢ
+print("\nChi tiết lập lịch mua/bán và sạc/xả điện theo từng giờ:")
+print("Giờ | Mua (kWh) | Chi phí (VNĐ) | Bán (kWh) | Doanh thu (VNĐ) | Sạc (kWh) | Xả (kWh) | SOC (kWh)")
+print("-" * 90)
+for t in hours:
+    print(f"{t:2}  | {buy_energy[t]:8.2f} | {buy_cost_per_hour[t]:12.0f} | {sell_energy[t]:8.2f} | {sell_revenue_per_hour[t]:12.0f} | {charge_energy[t]:8.2f} | {discharge_energy[t]:8.2f} | {battery_state[t]:8.2f}")
+
+# TỔNG KẾT
+print("\n📌 **Tổng kết:**")
+print(f"🔹 Tổng điện mua: {sum(buy_energy):.2f} kWh")
+print(f"🔹 Tổng điện bán: {sum(sell_energy):.2f} kWh")
+print(f"🔹 Chi phí mua điện: {buy_cost_total:.0f} VNĐ")
+print(f"🔹 Thu nhập từ bán điện: {sell_revenue_total:.0f} VNĐ")
+print(f"🔹 Tổng chi phí thực tế: {net_cost:.0f} VNĐ")
+
+# VẼ BIỂU ĐỒ
+plt.figure(figsize=(10, 6))
+plt.plot(hours, pv_power, 'b-o', label="Công suất PV (kW)")
+plt.plot(hours, load_power, 'orange', marker='o', linestyle='-', label="Phụ tải (kW)")
+plt.plot(hours, buy_energy, 'g-o', label="Mua từ lưới (kW)")
+plt.plot(hours, sell_energy, 'r-o', label="Bán lên lưới (kW)")
+plt.xlabel("Giờ trong ngày")
+plt.ylabel("Công suất (kW)")
+plt.title("Công suất PV, Phụ tải, Mua/Bán theo giờ")
+plt.xticks(hours)
+plt.legend()
+plt.grid()
+plt.show()
+
+plt.figure(figsize=(10, 6))
+plt.plot(hours, battery_state, 'purple', marker='o', linestyle='-', label="SOC của pin (kWh)")
+plt.xlabel("Giờ trong ngày")
+plt.ylabel("Dung lượng pin (kWh)")
+plt.title("Trạng thái SOC của pin theo thời gian")
+plt.xticks(hours)
+plt.legend()
+plt.grid()
+plt.show()
+
+cumulative_buy_cost = np.cumsum(buy_cost_per_hour)
+cumulative_sell_revenue = np.cumsum(sell_revenue_per_hour)
+plt.figure(figsize=(10, 6))
+plt.plot(hours, cumulative_buy_cost, 'g-o', label="Chi phí mua tích lũy (VNĐ)")
+plt.plot(hours, cumulative_sell_revenue, 'r-o', label="Doanh thu bán tích lũy (VNĐ)")
+plt.xlabel("Giờ trong ngày")
+plt.ylabel("VNĐ")
+plt.title("Chi phí mua và doanh thu bán điện tích lũy")
+plt.xticks(hours)
+plt.legend()
+plt.grid()
+plt.show()
+# In ra công suất sạc (P_charge) theo từng giờ
+print("\nCông suất sạc (P_charge) theo từng giờ:")
+print("-" * 40)
+for t in hours:
+    print(f"Giờ {t:2}: P_charge = {P_charge[t].varValue:.2f} kW")
+
+# Vẽ biểu đồ công suất sạc theo giờ
+plt.figure(figsize=(10, 6))
+plt.plot(hours, [P_charge[t].varValue for t in hours], 'b-o', label="Công suất sạc (kW)")
+plt.xlabel("Giờ trong ngày")
+plt.ylabel("Công suất (kW)")
+plt.title("Công suất Sạc theo giờ trong ngày")
+plt.xticks(hours)
+plt.legend()
+plt.grid()
+plt.show()
