@@ -129,18 +129,19 @@ for i in range(24):
     action = df_24h.loc[i, "action_pred"]
     pv = df_24h.loc[i, "PV_Power_kW"]
     load = df_24h.loc[i, "Load_Power_kW"]
-
-    charge_amount = min(P_charge_max, SOC_max - SOC, pv * eta_charge)
-    discharge_amount = min(P_discharge_max, SOC - SOC_min, load / eta_discharge)
+    surplus=pv-load
+    a=-surplus
+    charge_amount = min(P_charge_max, SOC_max - SOC, surplus * eta_charge)
+    discharge_amount = min(P_discharge_max, SOC - SOC_min, a / eta_discharge)
 
     if action == 1:  # Charge
         p_charge.append(charge_amount)
         p_discharge.append(0)
-        SOC += charge_amount / eta_charge  # Chuyển về năng lượng lưu trữ
+        SOC += charge_amount   # Chuyển về năng lượng lưu trữ
     elif action == 2:  # Discharge
         p_charge.append(0)
         p_discharge.append(discharge_amount)
-        SOC -= discharge_amount * eta_discharge  # Trừ đi lượng xả thực tế
+        SOC -= discharge_amount   # Trừ đi lượng xả thực tế
     else:  # Idle
         p_charge.append(0)
         p_discharge.append(0)
