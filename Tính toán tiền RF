@@ -1,0 +1,228 @@
+https://colab.research.google.com/drive/1NO-TvaQ3bmUOKG9d06EN8XfASTnZqcqf?usp=sharing
+
+# ============================ #
+#    1. Import thư viện cần thiết
+# ============================ #
+!pip install pulp
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from google.colab import files
+
+# ============================ #
+#    2. Tải & đọc dữ liệu gốc để huấn luyện
+# ============================ #
+print("📂 Vui lòng tải lên tệp CSV dữ liệu huấn luyện...")
+uploaded = files.upload()
+file_name = list(uploaded.keys())[0]
+df = pd.read_csv(f"/content/{file_name}")
+
+# ============================ #
+#    3. Tiền xử lý dữ liệu
+# ============================ #
+df["pvAvg12h"] = df["PV_Power_kW"].rolling(window=12, min_periods=1).mean().shift(1)
+df["priceAvg12h"] = df["Gia_mua_dien"].rolling(window=12, min_periods=1).mean().shift(1)
+df["loadAvg12h"] = df["Load_Power_kW"].rolling(window=12, min_periods=1).mean().shift(1)
+df.fillna(0, inplace=True)
+
+# ============================ #
+#    4. Chuẩn bị tập huấn luyện
+# ============================ #
+feature_cols = [
+    "PV_Power_kW", "Load_Power_kW", "SOC_kWh", "Gia_mua_dien",
+    "Gia_ban_dien", "pvAvg12h", "priceAvg12h", "loadAvg12h"
+]
+X = df[feature_cols]
+y = df["action"]
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# ============================ #
+#    5. Huấn luyện mô hình
+# ============================ #
+model = RandomForestClassifier(n_estimators=100, max_depth=10, class_weight='balanced', random_state=42)
+model.fit(X_train, y_train)
+
+# ============================ #
+#    6. Đánh giá mô hình
+# ============================ #
+y_pred = model.predict(X_test)
+print("\n🎯 Độ chính xác:", accuracy_score(y_test, y_pred))
+print("\n🧠 Báo cáo phân loại:\n", classification_report(y_test, y_pred))
+
+conf_matrix = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(6,4))
+sns.heatmap(conf_matrix, annot=True, fmt="d", cmap="Blues",
+            xticklabels=["Idle", "Charge", "Discharge"],
+            yticklabels=["Idle", "Charge", "Discharge"])
+plt.title("🔍 Ma Trận Nhầm Lẫn")
+plt.xlabel("Dự đoán")
+plt.ylabel("Thực tế")
+plt.show()
+
+# =========================== #
+# 7. Tạo dữ liệu mô phỏng 24h và dự đoán
+# =========================== #
+hours = np.arange(24)
+
+pv = np.array([0, 0, 0, 0, 0, 0, 0.66, 1.32, 2.42, 3.30, 3.96, 4.40, 4.62, 4.40, 3.96, 3.08, 1.98, 0.88, 0, 0, 0, 0, 0, 0])
+load = np.array([0.61, 0.61, 0.61, 0.61, 0.61, 0.61, 1.90, 2.15, 0.30, 0.30, 0.28, 3.13, 0.685, 0.68, 0.38, 0.38, 0.38, 1.52, 3.92, 3.92, 2.02, 2.02, 0.82, 0.67])
+
+def get_price(h):
+    if 22 <= h or h < 4:
+        return 1830
+    elif (9.5 <= h < 11.5) or (17 <= h < 20):
+        return 5174
+    else:
+        return 3007
+
+df_24h = pd.DataFrame({
+    "hour": hours,
+    "PV_Power_kW": pv,
+    "Load_Power_kW": load,
+    "Gia_mua_dien": [get_price(h) for h in hours],
+    "Gia_ban_dien": [671]*24
+})
+
+df_24h["pvAvg12h"] = df_24h["PV_Power_kW"].rolling(12, 1).mean()
+df_24h["priceAvg12h"] = df_24h["Gia_mua_dien"].rolling(12, 1).mean()
+df_24h["loadAvg12h"] = df_24h["Load_Power_kW"].rolling(12, 1).mean()
+df_24h["SOC_kWh"] = 9.6
+df_24h.fillna(0, inplace=True)
+
+# =========================== #
+# 8. Dự đoán hành động
+# =========================== #
+action_preds = model.predict(df_24h[feature_cols])
+df_24h["action_pred"] = action_preds
+
+# =========================== #
+# 9. Hiển thị kết quả dự đoán
+# =========================== #
+print("\n📊 Dự đoán hành động theo giờ:")
+for t in hours:
+    action = df_24h.loc[t, "action_pred"]
+    action_str = ["Idle", "Charge", "Discharge"][action]
+    print(f"Giờ {t:02d}: {action_str}")
+# =========================== #
+# 10. Tính toán công suất, SOC, chi phí/lợi nhuận theo hành động dự đoán
+# =========================== #
+SOC = 9.6
+SOC_min, SOC_max = 3.84, 15.36
+eta_charge = 0.9
+eta_discharge = 0.85
+P_charge_max = 9.6
+P_discharge_max = 19.2
+
+p_charge = []
+p_discharge = []
+p_grid_buy = []
+p_grid_sell = []
+soc_list = [SOC]  # SOC[0]
+
+for i in range(24):
+    action = df_24h.loc[i, "action_pred"]
+    pv = df_24h.loc[i, "PV_Power_kW"]
+    load = df_24h.loc[i, "Load_Power_kW"]
+
+    charge_amount = min(P_charge_max, SOC_max - SOC, pv * eta_charge)
+    discharge_amount = min(P_discharge_max, SOC - SOC_min, load / eta_discharge)
+
+    if action == 1:  # Charge
+        p_charge.append(charge_amount)
+        p_discharge.append(0)
+        SOC += charge_amount / eta_charge  # Chuyển về năng lượng lưu trữ
+    elif action == 2:  # Discharge
+        p_charge.append(0)
+        p_discharge.append(discharge_amount)
+        SOC -= discharge_amount * eta_discharge  # Trừ đi lượng xả thực tế
+    else:  # Idle
+        p_charge.append(0)
+        p_discharge.append(0)
+
+    # Cân bằng công suất
+    p_grid = pv + p_discharge[-1] - load - p_charge[-1]
+    if p_grid >= 0:
+        p_grid_sell.append(p_grid)
+        p_grid_buy.append(0)
+    else:
+        p_grid_buy.append(-p_grid)
+        p_grid_sell.append(0)
+
+    # Cập nhật SOC
+    SOC = max(min(SOC, SOC_max), SOC_min)
+    soc_list.append(SOC)
+
+# Ghi lại kết quả
+df_24h["P_charge"] = p_charge
+df_24h["P_discharge"] = p_discharge
+df_24h["P_grid_buy"] = p_grid_buy
+df_24h["P_grid_sell"] = p_grid_sell
+df_24h["SOC"] = soc_list[1:]
+
+df_24h["Chi_phi_mua"] = df_24h["P_grid_buy"] * df_24h["Gia_mua_dien"]
+df_24h["Thu_nhap_ban"] = df_24h["P_grid_sell"] * df_24h["Gia_ban_dien"]
+df_24h["Chi_phi_thuc"] = df_24h["Chi_phi_mua"] - df_24h["Thu_nhap_ban"]
+
+# =========================== #
+# 11. Hiển thị kết quả
+# =========================== #
+print("\n🔋 KẾT QUẢ DỰA TRÊN DỰ ĐOÁN & CÔNG THỨC ĐƠN GIẢN\n")
+for t in range(24):
+    print(f"Giờ {t:02d}: "
+          f"Sạc = {df_24h.loc[t, 'P_charge']:.2f} kW | "
+          f"Xả = {df_24h.loc[t, 'P_discharge']:.2f} kW | "
+          f"Mua = {df_24h.loc[t, 'P_grid_buy']:.2f} kW | "
+          f"Bán = {df_24h.loc[t, 'P_grid_sell']:.2f} kW | "
+          f"SOC = {df_24h.loc[t, 'SOC']:.2f} kWh")
+
+total_buy = df_24h["Chi_phi_mua"].sum()
+total_sell = df_24h["Thu_nhap_ban"].sum()
+
+print(f"\n💰 Tổng chi phí mua điện: {total_buy:,.0f} VNĐ")
+print(f"💸 Tổng doanh thu bán điện: {total_sell:,.0f} VNĐ")
+print(f"📉 Chi phí thực tế: {total_buy - total_sell:,.0f} VNĐ")
+
+# =========================== #
+# 12. Vẽ biểu đồ như cũ
+# =========================== #
+plt.figure(figsize=(12, 6))
+plt.plot(df_24h["hour"], df_24h["P_charge"], label="Sạc", marker='o')
+plt.plot(df_24h["hour"], df_24h["P_discharge"], label="Xả", marker='s')
+plt.plot(df_24h["hour"], df_24h["P_grid_buy"], label="Mua từ lưới", marker='^')
+plt.plot(df_24h["hour"], df_24h["P_grid_sell"], label="Bán lên lưới", marker='v')
+plt.title("🔌 Công suất theo từng giờ")
+plt.xlabel("Giờ")
+plt.ylabel("kW")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# SOC
+plt.figure(figsize=(10, 4))
+plt.plot(df_24h["hour"], df_24h["SOC"], label="SOC (kWh)", color="orange", marker='o')
+plt.title("🔋 Trạng thái pin (SOC) theo giờ")
+plt.xlabel("Giờ")
+plt.ylabel("kWh")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# Chi phí mua & bán điện
+plt.figure(figsize=(10, 4))
+plt.plot(df_24h["hour"], df_24h["Chi_phi_mua"], label="Chi phí mua điện", color="blue", marker='o')
+plt.plot(df_24h["hour"], df_24h["Thu_nhap_ban"], label="Thu nhập bán điện", color="green", marker='s')
+plt.title("💰 Chi phí mua & Doanh thu bán điện theo giờ")
+plt.xlabel("Giờ")
+plt.ylabel("VNĐ")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
